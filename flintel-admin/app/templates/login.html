@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block body %}
+<div class="card" style="max-width:340px;margin:80px auto">
+<h1>Flintel Admin</h1><br>
+{% if error %}<div class="msg bad">{{ error }}</div>{% endif %}
+<form method="post" action="/login">
+<input type="password" name="password" placeholder="Admin password" autofocus required style="width:100%;box-sizing:border-box"><br><br>
+<button type="submit">Log in</button></form></div>
+{% endblock %}

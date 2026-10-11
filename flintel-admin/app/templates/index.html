@@ -1,0 +1,57 @@
+{% extends "base.html" %}{% block body %}
+<div class="row"><h1>Flintel Admin <span class="muted">(read-only + backup)</span></h1>
+<form method="post" action="/logout"><button type="submit">Log out</button></form></div>
+
+{% if flash %}<div class="msg {{ 'ok' if flash.ok else 'bad' }}">{{ flash.msg }}</div>{% endif %}
+
+<div class="card"><h2>Connection</h2>
+{% if info.ok %}
+<div class="grid">
+<div class="stat"><span class="muted">Status</span><b class="ok">Connected</b></div>
+<div class="stat"><span class="muted">Database</span><b>{{ info.database }}</b></div>
+<div class="stat"><span class="muted">Server</span><b style="font-size:15px">{{ info.version }}</b></div>
+<div class="stat"><span class="muted">Total size</span><b>{{ info.db_size|size }}</b></div>
+</div>
+{% else %}<p class="bad">Not connected</p><div class="msg bad">{{ info.error }}</div>{% endif %}
+{% for w in info.warnings %}<div class="msg bad">{{ w }}</div>{% endfor %}
+</div>
+
+{% if info.ok %}
+{% if info.signals %}
+<div class="card"><h2>flintel_signals</h2><div class="grid">
+<div class="stat"><span class="muted">Rows</span><b>{{ info.signals.rows }}</b></div>
+<div class="stat"><span class="muted">Embeddings{% if info.signals.embedding_col %} ({{ info.signals.embedding_col }}){% endif %}</span><b>{{ info.signals.embeddings if info.signals.embeddings is not none else 'n/a' }}</b></div>
+<div class="stat"><span class="muted">Table size</span><b>{{ info.signals.size|size }}</b></div>
+</div></div>
+{% endif %}
+
+<div class="card"><h2>Tables</h2><table>
+<tr><th>Name</th><th>Approx. rows</th><th>Data</th><th>Indexes</th></tr>
+{% for t in info.tables %}<tr><td>{{ t.name }}</td><td>{{ t.approx_rows }}</td><td>{{ t.data_len|size }}</td><td>{{ t.idx_len|size }}</td></tr>{% endfor %}
+</table></div>
+
+{% if info.columns %}
+<div class="card"><h2>Schema: flintel_signals</h2><table>
+<tr><th>Column</th><th>Type</th><th>Null</th><th>Key</th><th>Extra</th></tr>
+{% for c in info.columns %}<tr><td>{{ c.name }}</td><td>{{ c.type }}</td><td>{{ c.nullable }}</td><td>{{ c.ckey }}</td><td>{{ c.extra }}</td></tr>{% endfor %}
+</table><br><table>
+<tr><th>Index</th><th>Unique</th><th>Columns</th></tr>
+{% for i in info.indexes %}<tr><td>{{ i.name }}</td><td>{{ 'no' if i.non_unique else 'yes' }}</td><td>{{ i.cols }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+{% endif %}
+
+<div class="card"><div class="row"><h2>Backups</h2>
+<form method="post" action="/backup" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Backing up...'">
+<button type="submit" {% if not dump_ok %}disabled{% endif %}>Create Backup</button></form></div>
+{% if not dump_ok %}<div class="msg bad">mysqldump not found. Install MySQL client tools or set MYSQLDUMP_PATH in .env.</div>{% endif %}
+{% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th></th></tr>
+{% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td>
+<td><a class="btn" href="/download/{{ b.name }}">Download</a></td></tr>{% endfor %}</table>
+{% else %}<p class="muted">No backups yet.</p>{% endif %}</div>
+
+<div class="card disabled-box"><h2>Restore (disabled)</h2>
+<p>Restore is intentionally not available in this tool, so production can never be overwritten from here.
+To test a backup, import it into a <b>new, separate local</b> database with the mysql command line (see README).</p>
+<button disabled>Restore</button></div>
+{% endblock %}

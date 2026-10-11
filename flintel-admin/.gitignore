@@ -1,0 +1,5 @@
+.env
+backups/*.sql
+backups/*.tmp
+.venv/
+__pycache__/

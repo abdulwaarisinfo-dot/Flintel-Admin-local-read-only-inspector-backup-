@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flintel Admin</title>
+<style>
+body{font:14px/1.5 system-ui,Segoe UI,sans-serif;margin:0;background:#f4f5f7;color:#1c1e21}
+main{max-width:960px;margin:0 auto;padding:20px}
+h1{font-size:20px;margin:0}h2{font-size:15px;margin:0 0 10px}
+.card{background:#fff;border:1px solid #dde0e4;border-radius:8px;padding:16px;margin:14px 0}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #eee}
+th{color:#666;font-weight:600}
+.ok{color:#117a3d;font-weight:600}.bad{color:#b3261e;font-weight:600}
+.msg{padding:10px 14px;border-radius:6px;margin:14px 0}.msg.ok{background:#e4f5ea}.msg.bad{background:#fde8e6}
+button,.btn{background:#2155cd;color:#fff;border:0;border-radius:6px;padding:7px 14px;font:inherit;cursor:pointer;text-decoration:none}
+button:disabled{background:#aab;cursor:not-allowed}
+.row{display:flex;justify-content:space-between;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.stat b{display:block;font-size:20px}.muted{color:#777}input{padding:7px;font:inherit}
+.disabled-box{opacity:.6}
+</style></head><body><main>{% block body %}{% endblock %}</main></body></html>
