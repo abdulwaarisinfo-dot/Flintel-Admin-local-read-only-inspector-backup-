@@ -43,8 +43,8 @@
 
 <div class="card"><div class="row"><h2>Backups</h2>
 <form method="post" action="/backup" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Backing up...'">
-<button type="submit" {% if not dump_ok %}disabled{% endif %}>Create Backup</button></form></div>
-{% if not dump_ok %}<div class="msg bad">mysqldump not found. Install MySQL client tools or set MYSQLDUMP_PATH in .env.</div>{% endif %}
+<button type="submit">Create Backup</button></form></div>
+<p class="muted">Saves <b>{{ info.database or 'database' }}.json</b> (structure + all rows, read-only; the live database is never changed). Download it right after creating it.</p>
 {% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th></th></tr>
 {% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td>
 <td><a class="btn" href="/download/{{ b.name }}">Download</a></td></tr>{% endfor %}</table>
@@ -52,6 +52,6 @@
 
 <div class="card disabled-box"><h2>Restore (disabled)</h2>
 <p>Restore is intentionally not available in this tool, so production can never be overwritten from here.
-To test a backup, import it into a <b>new, separate local</b> database with the mysql command line (see README).</p>
+The JSON backup is a safe copy of your data; it is never written back to the live database from here.</p>
 <button disabled>Restore</button></div>
 {% endblock %}
