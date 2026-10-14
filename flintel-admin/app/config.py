@@ -45,3 +45,4 @@ def get_db_settings() -> dict:
 
 def use_ssl() -> bool:
     return os.getenv("MYSQL_SSL", "").strip().lower() in ("1", "true", "yes", "on")
+ 
