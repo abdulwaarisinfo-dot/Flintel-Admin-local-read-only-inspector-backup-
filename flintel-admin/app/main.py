@@ -52,8 +52,7 @@ def dashboard(request: Request):
     if not authed(request):
         return RedirectResponse("/login", status_code=303)
     ctx = {"info": db.collect_status(), "backups": backup.list_backups(),
-           "flash": request.session.pop("flash", None),
-           "dump_ok": backup.find_mysqldump() is not None}
+           "flash": request.session.pop("flash", None)}
     return templates.TemplateResponse(request, "index.html", ctx)
 
 
@@ -76,4 +75,4 @@ def download(request: Request, name: str):
     p = backup.backup_path(name)
     if not p:
         raise HTTPException(404, "Backup not found")
-    return FileResponse(p, media_type="application/sql", filename=p.name)
+    return FileResponse(p, media_type="application/json", filename=p.name)
