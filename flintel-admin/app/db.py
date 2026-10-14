@@ -8,6 +8,7 @@ from . import config
 TABLE = "flintel_signals"
 BLOB_TYPES = {"tinyblob", "blob", "mediumblob", "longblob"}
 _engine = None
+_backup_engine = None
 
 
 def friendly_error(e: Exception) -> str:
@@ -27,24 +28,44 @@ def friendly_error(e: Exception) -> str:
     return "Database error%s. Check the console log for details." % (" (code %s)" % code if code else "")
 
 
+def _build_engine(read_timeout: int):
+    s = config.get_db_settings()
+    url = URL.create("mysql+pymysql", username=s["user"], password=s["password"],
+                     host=s["host"], port=s["port"], database=s["database"],
+                     query={"charset": "utf8mb4"})
+    args = {"connect_timeout": 10, "read_timeout": read_timeout}
+    if config.use_ssl():
+        args["ssl"] = {"check_hostname": False}
+    engine = create_engine(url, connect_args=args, pool_pre_ping=True, pool_recycle=300)
+
+    @event.listens_for(engine, "connect")
+    def _readonly(dbapi_conn, _rec):  # belt and braces: server rejects writes
+        cur = dbapi_conn.cursor()
+        cur.execute("SET SESSION TRANSACTION READ ONLY")
+        cur.close()
+    return engine
+
+
 def get_engine():
     global _engine
     if _engine is None:
-        s = config.get_db_settings()
-        url = URL.create("mysql+pymysql", username=s["user"], password=s["password"],
-                         host=s["host"], port=s["port"], database=s["database"],
-                         query={"charset": "utf8mb4"})
-        args = {"connect_timeout": 10, "read_timeout": 30}
-        if config.use_ssl():
-            args["ssl"] = {"check_hostname": False}
-        _engine = create_engine(url, connect_args=args, pool_pre_ping=True, pool_recycle=300)
-
-        @event.listens_for(_engine, "connect")
-        def _readonly(dbapi_conn, _rec):  # belt and braces: server rejects writes
-            cur = dbapi_conn.cursor()
-            cur.execute("SET SESSION TRANSACTION READ ONLY")
-            cur.close()
+        _engine = _build_engine(read_timeout=30)
     return _engine
+
+
+def get_backup_engine():
+    """Separate read-only engine with a long read timeout, used only by the JSON backup."""
+    global _backup_engine
+    if _backup_engine is None:
+        _backup_engine = _build_engine(read_timeout=900)
+    return _backup_engine
+
+
+def run_ro(conn, sql: str):
+    """Run a fixed SELECT/SHOW statement as-is (no bind-parameter parsing). Used by backup."""
+    if sql.lstrip().split(None, 1)[0].upper() not in ("SELECT", "SHOW"):
+        raise RuntimeError("Only SELECT/SHOW statements are allowed")
+    return conn.exec_driver_sql(sql)
 
 
 def _q(conn, sql, params=None):
