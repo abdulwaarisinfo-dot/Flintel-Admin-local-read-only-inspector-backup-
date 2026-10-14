@@ -1,5 +1,6 @@
 .env
-backups/*.sql
+backups/*.json
 backups/*.tmp
+backups/*.sql
 .venv/
 __pycache__/
