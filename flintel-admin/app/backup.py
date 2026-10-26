@@ -4,9 +4,11 @@ Only fixed SHOW / SELECT statements are run, inside one read-only transaction, s
 database is never modified. The result is written to  backups/<database-name>.json
 (the database name comes from .env), e.g. backups/flintel.json.
 """
+import gzip
 import json
 import re
 import threading
+import time as _time
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
@@ -14,10 +16,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from . import config, db
 
-NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
+NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.json(\.gz)?$")
 FORMAT = "flintel-json-backup-v1"
 CHUNK = 500  # rows fetched from the server at a time (keeps memory low)
 _lock = threading.Lock()
+# Shared progress, read by /backup/status while the backup thread runs.
+STATE = {"running": False, "table": None, "rows": 0, "tables_done": 0, "tables_total": 0,
+         "started": None, "finished": None, "ok": None, "msg": None, "file": None}
 
 
 class BackupError(Exception):
@@ -49,14 +54,15 @@ def _dumps(obj) -> str:
 
 
 def create_backup() -> str:
+    """Blocking backup (used by the background thread). Writes backups/<db>.json.gz."""
     try:
         s = config.get_db_settings()
     except config.ConfigError as e:
         raise BackupError(str(e))
 
     safe_db = re.sub(r"[^A-Za-z0-9_-]", "", s["database"]) or "database"
-    final = config.BACKUP_DIR / ("%s.json" % safe_db)
-    tmp = final.with_suffix(".json.tmp")
+    final = config.BACKUP_DIR / ("%s.json.gz" % safe_db)
+    tmp = final.with_suffix(".gz.tmp")
 
     if not _lock.acquire(blocking=False):
         raise BackupError("A backup is already running. Please wait for it to finish.")
@@ -80,6 +86,30 @@ def create_backup() -> str:
         _lock.release()
 
 
+def _run_in_thread():
+    try:
+        name = create_backup()
+        STATE.update(ok=True, file=name, msg="Backup created: " + name)
+    except BackupError as e:
+        STATE.update(ok=False, msg=str(e))
+    except Exception as e:
+        print("Backup thread error:", type(e).__name__, e)
+        STATE.update(ok=False, msg="Backup failed (%s). Check the server log." % type(e).__name__)
+    finally:
+        STATE.update(running=False, finished=_time.time())
+
+
+def start_backup() -> bool:
+    """Start the backup in a background thread so the web request returns at once
+    (a single long HTTP request gets cut off by Render's proxy). False if already running."""
+    if STATE["running"]:
+        return False
+    STATE.update(running=True, table=None, rows=0, tables_done=0, tables_total=0,
+                 started=_time.time(), finished=None, ok=None, msg=None, file=None)
+    threading.Thread(target=_run_in_thread, daemon=True, name="backup").start()
+    return True
+
+
 def _write_backup(tmp_path, database: str) -> None:
     engine = db.get_backup_engine()
     with engine.connect() as conn:   # one read-only transaction = consistent snapshot
@@ -89,8 +119,9 @@ def _write_backup(tmp_path, database: str) -> None:
         objects.sort(key=lambda x: x[0])
         if not objects:
             raise BackupError("Backup failed: the database has no tables.")
+        STATE["tables_total"] = len(objects)
 
-        with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+        with gzip.open(tmp_path, "wt", encoding="utf-8", newline="\n", compresslevel=5) as f:
             f.write("{\n")
             f.write('"format": %s,\n' % _dumps(FORMAT))
             f.write('"database": %s,\n' % _dumps(database))
@@ -103,7 +134,9 @@ def _write_backup(tmp_path, database: str) -> None:
             for i, (name, kind) in enumerate(objects):
                 if i:
                     f.write(",\n")
+                STATE["table"] = name
                 _write_object(f, conn, name, kind)
+                STATE["tables_done"] = i + 1
 
             f.write("\n},\n")
             f.write('"completed_at": %s\n}\n' % _dumps(datetime.now().isoformat(timespec="seconds")))
@@ -137,6 +170,7 @@ def _write_object(f, conn, name: str, kind: str) -> None:
             for row in chunk:
                 f.write(("\n" if count == 0 else ",\n") + _dumps(list(row)))
                 count += 1
+            STATE["rows"] += len(chunk)
     finally:
         result.close()
 
@@ -145,7 +179,7 @@ def _write_object(f, conn, name: str, kind: str) -> None:
 
 def list_backups():
     out = []
-    for p in config.BACKUP_DIR.glob("*.json"):
+    for p in sorted(list(config.BACKUP_DIR.glob("*.json")) + list(config.BACKUP_DIR.glob("*.json.gz"))):
         st = p.stat()
         out.append({"name": p.name, "size": st.st_size,
                     "when": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")})
