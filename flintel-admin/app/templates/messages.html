@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block body %}
+<div class="row"><h1>{{ table }} <span class="muted">(newest first)</span></h1><a class="btn" href="/">Back</a></div>
+{% if error %}<div class="msg bad">{{ error }}</div>{% elif page %}
+<div class="card" style="overflow-x:auto">
+<table>
+<tr>{% for c in page.columns %}<th>{{ c }}{% if c in page.blob_cols %} (bytes){% endif %}</th>{% endfor %}</tr>
+{% for r in page.rows %}<tr>{% for v in r %}<td style="max-width:360px;word-break:break-word">{{ '' if v is none else v }}</td>{% endfor %}</tr>
+{% else %}<tr><td class="muted">No rows.</td></tr>{% endfor %}
+</table>
+<p class="muted">Showing {{ page.rows|length }} rows per page. Long text is cut to a preview, BLOB columns show only their size.</p>
+<p>{% if page.next is not none %}<a class="btn" href="/messages?before={{ page.next }}&limit={{ page.limit }}">Older &rarr;</a>{% endif %}
+{% if request.query_params.get('before') %}<a class="btn" href="/messages?limit={{ page.limit }}" style="background:#667">&larr; Newest</a>{% endif %}</p>
+</div>{% endif %}
+{% endblock %}
