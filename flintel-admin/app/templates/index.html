@@ -19,13 +19,10 @@
 {% if info.ok %}
 {% if info.signals %}
 <div class="card"><h2>flintel_signals</h2><div class="grid">
-<div class="stat"><span class="muted">Rows (approx.)</span><b id="rows">&asymp; {{ info.signals.rows }}</b></div>
-<div class="stat"><span class="muted">Embeddings{% if info.signals.embedding_col %} ({{ info.signals.embedding_col }}){% endif %}</span><b id="emb">&ndash;</b></div>
+<div class="stat"><span class="muted">Rows</span><b>{{ info.signals.rows }}</b></div>
+<div class="stat"><span class="muted">Embeddings{% if info.signals.embedding_col %} ({{ info.signals.embedding_col }}){% endif %}</span><b>{{ info.signals.embeddings if info.signals.embeddings is not none else 'n/a' }}</b></div>
 <div class="stat"><span class="muted">Table size</span><b>{{ info.signals.size|size }}</b></div>
-</div>
-<p style="margin-top:12px"><button id="cbtn" type="button" onclick="loadCounts(true)">Exact counts</button>
-<a class="btn" href="/messages" style="margin-left:6px">Browse rows</a>
-<span class="muted" id="cmsg" style="margin-left:8px">Exact counts scan the whole table, so they run only when you click.</span></p></div>
+</div></div>
 {% endif %}
 
 <div class="card"><h2>Tables</h2><table>
@@ -45,9 +42,9 @@
 {% endif %}
 
 <div class="card"><div class="row"><h2>Backups</h2>
-<form method="post" action="/backup"><button type="submit" id="bbtn">Create Backup</button></form></div>
-<div id="bstat" class="msg" style="display:none"></div>
-<p class="muted">Saves <b>{{ info.database or 'database' }}.json.gz</b> (compressed, runs in the background) (structure + all rows, read-only; the live database is never changed). Download it right after creating it.</p>
+<form method="post" action="/backup" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Backing up...'">
+<button type="submit">Create Backup</button></form></div>
+<p class="muted">Saves <b>{{ info.database or 'database' }}.json</b> (structure + all rows, read-only; the live database is never changed). Download it right after creating it.</p>
 {% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th></th></tr>
 {% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td>
 <td><a class="btn" href="/download/{{ b.name }}">Download</a></td></tr>{% endfor %}</table>
@@ -57,36 +54,4 @@
 <p>Restore is intentionally not available in this tool, so production can never be overwritten from here.
 The JSON backup is a safe copy of your data; it is never written back to the live database from here.</p>
 <button disabled>Restore</button></div>
-<script>
-function fmt(n){return Number(n).toLocaleString()}
-async function loadCounts(force){
-  const b=document.getElementById('cbtn'), m=document.getElementById('cmsg');
-  b.disabled=true; m.textContent='Counting... this can take a while on a big table.';
-  try{
-    const r=await fetch('/api/counts'+(force?'?force=true':'')); const j=await r.json();
-    if(!r.ok) throw new Error(j.error||'failed');
-    document.getElementById('rows').textContent=fmt(j.rows);
-    document.getElementById('emb').textContent=j.embeddings==null?'n/a':fmt(j.embeddings);
-    m.textContent='Exact'+(j.cached?' (cached, <10 min old)':'');
-  }catch(e){m.textContent='Error: '+e.message}
-  b.disabled=false;
-}
-async function pollBackup(){
-  const box=document.getElementById('bstat'), btn=document.getElementById('bbtn');
-  try{
-    const j=await (await fetch('/backup/status')).json();
-    if(j.running){
-      box.style.display='block'; box.className='msg';
-      box.textContent='Backup running: table '+(j.tables_done+1)+'/'+j.tables_total+' ('+(j.table||'...')+'), '+fmt(j.rows)+' rows written';
-      btn.disabled=true; btn.textContent='Backing up...';
-      setTimeout(pollBackup,2000); return;
-    }
-    if(j.ok!==null && j.msg){
-      box.style.display='block'; box.className='msg '+(j.ok?'ok':'bad'); box.textContent=j.msg+(j.ok?' ('+fmt(j.rows)+' rows). Reload this page to download it.':'');
-    }
-  }catch(e){}
-  btn.disabled=false; btn.textContent='Create Backup';
-}
-pollBackup();
-</script>
 {% endblock %}
