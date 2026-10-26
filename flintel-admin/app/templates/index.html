@@ -18,9 +18,11 @@
 
 {% if info.ok %}
 {% if info.signals %}
-<div class="card"><h2>flintel_signals</h2><div class="grid">
-<div class="stat"><span class="muted">Rows</span><b>{{ info.signals.rows }}</b></div>
-<div class="stat"><span class="muted">Embeddings{% if info.signals.embedding_col %} ({{ info.signals.embedding_col }}){% endif %}</span><b>{{ info.signals.embeddings if info.signals.embeddings is not none else 'n/a' }}</b></div>
+<div class="card"><h2>flintel_signals</h2>
+{% if info.signals.range %}<div class="msg ok">Range from .env: only ids <b>{{ info.signals.range['from'] }}&ndash;{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}</b> are counted and backed up. The rest of the table is not read.</div>{% endif %}
+<div class="grid">
+<div class="stat"><span class="muted">Rows{% if info.signals.range %} (in range){% endif %}</span><b>{{ info.signals.rows if info.signals.rows is not none else 'n/a' }}</b></div>
+<div class="stat"><span class="muted">Embeddings{% if info.signals.embedding_col %} ({{ info.signals.embedding_col }}){% endif %}{% if info.signals.range %} (in range){% endif %}</span><b>{{ info.signals.embeddings if info.signals.embeddings is not none else 'n/a' }}</b></div>
 <div class="stat"><span class="muted">Table size</span><b>{{ info.signals.size|size }}</b></div>
 </div></div>
 {% endif %}
@@ -44,7 +46,8 @@
 <div class="card"><div class="row"><h2>Backups</h2>
 <form method="post" action="/backup" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Backing up...'">
 <button type="submit">Create Backup</button></form></div>
-<p class="muted">Saves <b>{{ info.database or 'database' }}.json</b> (structure + all rows, read-only; the live database is never changed). Download it right after creating it.</p>
+{% if info.signals %}<p class="muted">Backup range: {% if info.signals.range_state == 'range' %}<b>ids {{ info.signals.range['from'] }}&ndash;{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}</b> (from .env) &rarr; file <b>{{ info.database }}_{{ info.signals.range['from'] }}-{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}.json</b>{% elif info.signals.range_state == 'full' %}<b>not set</b> &rarr; full backup of all rows. (BACKUP_FROM / BACKUP_TO were not found in .env or the environment.){% else %}see the warning above{% endif %}</p>{% endif %}
+<p class="muted">Saves <b>{% if info.signals and info.signals.range %}{{ info.database or 'database' }}_{{ info.signals.range['from'] }}-{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}{% else %}{{ info.database or 'database' }}{% endif %}.json</b> ({% if info.signals and info.signals.range %}structure + only the rows in that id range{% else %}structure + all rows{% endif %}, read-only; the live database is never changed). Download it right after creating it.</p>
 {% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th></th></tr>
 {% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td>
 <td><a class="btn" href="/download/{{ b.name }}">Download</a></td></tr>{% endfor %}</table>
