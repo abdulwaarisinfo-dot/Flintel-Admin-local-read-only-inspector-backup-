@@ -1,7 +1,7 @@
 """Read-only database access. Only fixed SELECT/SHOW queries are ever run."""
 import re
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import URL 
+from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from . import config
 
@@ -83,6 +83,31 @@ def ping() -> bool:
         return False
 
 
+def _count_scope(columns, warnings):
+    """What the dashboard may count. Returns (where_sql, range_info, state).
+    state "full"  : no range in .env -> count the whole table, exactly as before.
+    state "range" : BACKUP_FROM / BACKUP_TO set -> count ONLY those ids (a primary-key range, fast);
+                    the rest of the table is never read.
+    state "error" : bad value / no single primary key -> counts are skipped, nothing is scanned."""
+    from . import backup   # imported here because backup.py imports db at the top
+    try:
+        rng = backup._range_settings()
+    except backup.BackupError as e:
+        warnings.append("Counts skipped: " + str(e))
+        return None, None, "error"
+    if not rng:
+        return "", None, "full"
+    pks = [x["name"] for x in columns if x["ckey"] == "PRI"]
+    if len(pks) != 1 or not re.fullmatch(r"[A-Za-z0-9_$]+", pks[0]):
+        warnings.append("A backup range is set but '%s' has no single-column primary key, so counts are skipped." % TABLE)
+        return None, None, "error"
+    lo, hi = rng
+    where = " WHERE `%s` >= %d" % (pks[0], lo)
+    if hi is not None:
+        where += " AND `%s` <= %d" % (pks[0], hi)
+    return where, {"column": pks[0], "from": lo, "to": hi}, "range"
+
+
 def collect_status() -> dict:
     out = {"ok": False, "error": None, "database": None, "version": None, "tables": [],
            "db_size": None, "signals": None, "columns": [], "indexes": [], "warnings": []}
@@ -104,7 +129,7 @@ def collect_status() -> dict:
                 out["warnings"].append("Table '%s' was not found." % TABLE)
                 return out
 
-            sig = {"rows": _q(c, "SELECT COUNT(*) FROM `%s`" % TABLE).scalar()}
+            sig = {}
             me = next(t for t in out["tables"] if t["name"] == TABLE)
             sig["size"] = (me["data_len"] or 0) + (me["idx_len"] or 0)
 
@@ -119,13 +144,18 @@ def collect_status() -> dict:
                    "FROM information_schema.statistics WHERE table_schema = DATABASE() "
                    "AND table_name = :t GROUP BY index_name, non_unique", {"t": TABLE}).all()]
 
+            where, sig["range"], sig["range_state"] = _count_scope(out["columns"], out["warnings"])
+            sig["rows"] = None if where is None else _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, where)).scalar()
+
             blobs = [x["name"] for x in out["columns"]
                      if str(x["type"]).split("(")[0].lower() in BLOB_TYPES]
             col = "embedding" if "embedding" in blobs else (blobs[0] if blobs else None)
             sig["embedding_col"] = col
             sig["embeddings"] = None
             if col and re.fullmatch(r"[A-Za-z0-9_$]+", col):
-                sig["embeddings"] = _q(c, "SELECT COUNT(*) FROM `%s` WHERE `%s` IS NOT NULL" % (TABLE, col)).scalar()
+                if where is not None:
+                    cond = (where + " AND" if where else " WHERE") + " `%s` IS NOT NULL" % col
+                    sig["embeddings"] = _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, cond)).scalar()
             else:
                 out["warnings"].append("No BLOB embedding column found in '%s'." % TABLE)
             out["signals"] = sig
@@ -134,4 +164,3 @@ def collect_status() -> dict:
         out["error"] = friendly_error(e)
         print("DB error:", type(e).__name__, getattr(e, "orig", e))
     return out
-
