@@ -1,7 +1,7 @@
 """Read-only database access. Only fixed SELECT/SHOW queries are ever run."""
 import re
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL 
 from sqlalchemy.exc import SQLAlchemyError
 from . import config
 
