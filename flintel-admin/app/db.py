@@ -13,21 +13,35 @@ _engine = None
 _backup_engine = None
 
 
+def _detail(e: Exception) -> str:
+    """Asli MySQL error (code + message) — isme user/host/table ka naam hota hai, password nahi."""
+    orig = getattr(e, "orig", None)
+    if orig is not None and getattr(orig, "args", None):
+        a = orig.args
+        if len(a) >= 2 and isinstance(a[0], int):
+            return " [MySQL %s: %s]" % (a[0], a[1])
+        return " [%s]" % (a,)
+    return ""
+
+
 def friendly_error(e: Exception) -> str:
     if isinstance(e, config.ConfigError):
         return str(e)
     orig = getattr(e, "orig", None)
     code = orig.args[0] if orig is not None and orig.args and isinstance(orig.args[0], int) else None
+    d = _detail(e)
     if code == 1045:
-        return "Authentication failed: MySQL rejected the username or password. Check the credentials in .env."
-    if code in (1044, 1142):
-        return "Access denied: this MySQL user lacks permission for the database/table."
+        return "Authentication failed: MySQL rejected the username or password. Check the credentials in .env." + d
+    if code in (1044, 1142, 1143):
+        return ("Access denied: this MySQL user lacks permission for the database/table. "
+                "Fix: use the same MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE as the Flintel service, or run "
+                "GRANT SELECT, SHOW VIEW ON <database>.* TO '<user>'@'%'; FLUSH PRIVILEGES;" + d)
     if code == 1049:
-        return "Database not found on the server. Check MYSQL_DATABASE (should be 'flintel')."
+        return "Database not found on the server. Check MYSQL_DATABASE (should be 'flintel')." + d
     if code in (2002, 2003, 2005, 2006, 2013):
         return ("Cannot reach the MySQL server (unreachable or timed out). Check host/port, "
-                "that the Render database is running and reachable from this PC, and MYSQL_SSL.")
-    return "Database error%s. Check the console log for details." % (" (code %s)" % code if code else "")
+                "that the Render database is running and reachable from this PC, and MYSQL_SSL." + d)
+    return "Database error%s. Check the console log for details." % (" (code %s)" % code if code else "") + d
 
 
 def _build_engine(read_timeout: int):
@@ -172,39 +186,44 @@ def collect_status() -> dict:
 
             names = [t["name"] for t in out["tables"]]
             if TABLE not in names:
-                out["warnings"].append("Table '%s' was not found." % TABLE)
+                out["warnings"].append("Table '%s' was not found (or this MySQL user has no SELECT permission on it)." % TABLE)
                 return out
 
-            sig = {}
-            me = next(t for t in out["tables"] if t["name"] == TABLE)
-            sig["size"] = (me["data_len"] or 0) + (me["idx_len"] or 0)
+            try:
+                sig = {}
+                me = next(t for t in out["tables"] if t["name"] == TABLE)
+                sig["size"] = (me["data_len"] or 0) + (me["idx_len"] or 0)
 
-            cols = _q(c, "SELECT column_name AS name, column_type AS type, is_nullable AS nullable, "
-                         "column_key AS ckey, extra AS extra FROM information_schema.columns "
-                         "WHERE table_schema = DATABASE() AND table_name = :t "
-                         "ORDER BY ordinal_position", {"t": TABLE}).all()
-            out["columns"] = [dict(r._mapping) for r in cols]
-            out["indexes"] = [dict(r._mapping) for r in _q(
-                c, "SELECT index_name AS name, non_unique AS non_unique, "
-                   "GROUP_CONCAT(column_name ORDER BY seq_in_index) AS cols "
-                   "FROM information_schema.statistics WHERE table_schema = DATABASE() "
-                   "AND table_name = :t GROUP BY index_name, non_unique", {"t": TABLE}).all()]
+                cols = _q(c, "SELECT column_name AS name, column_type AS type, is_nullable AS nullable, "
+                             "column_key AS ckey, extra AS extra FROM information_schema.columns "
+                             "WHERE table_schema = DATABASE() AND table_name = :t "
+                             "ORDER BY ordinal_position", {"t": TABLE}).all()
+                out["columns"] = [dict(r._mapping) for r in cols]
+                out["indexes"] = [dict(r._mapping) for r in _q(
+                    c, "SELECT index_name AS name, non_unique AS non_unique, "
+                       "GROUP_CONCAT(column_name ORDER BY seq_in_index) AS cols "
+                       "FROM information_schema.statistics WHERE table_schema = DATABASE() "
+                       "AND table_name = :t GROUP BY index_name, non_unique", {"t": TABLE}).all()]
 
-            where, sig["range"], sig["range_state"] = _count_scope(out["columns"], out["warnings"])
-            sig["rows"] = None if where is None else _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, where)).scalar()
+                where, sig["range"], sig["range_state"] = _count_scope(out["columns"], out["warnings"])
+                sig["rows"] = None if where is None else _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, where)).scalar()
 
-            blobs = [x["name"] for x in out["columns"]
-                     if str(x["type"]).split("(")[0].lower() in BLOB_TYPES]
-            col = "embedding" if "embedding" in blobs else (blobs[0] if blobs else None)
-            sig["embedding_col"] = col
-            sig["embeddings"] = None
-            if col and re.fullmatch(r"[A-Za-z0-9_$]+", col):
-                if where is not None:
-                    cond = (where + " AND" if where else " WHERE") + " `%s` IS NOT NULL" % col
-                    sig["embeddings"] = _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, cond)).scalar()
-            else:
-                out["warnings"].append("No BLOB embedding column found in '%s'." % TABLE)
-            out["signals"] = sig
+                blobs = [x["name"] for x in out["columns"]
+                         if str(x["type"]).split("(")[0].lower() in BLOB_TYPES]
+                col = "embedding" if "embedding" in blobs else (blobs[0] if blobs else None)
+                sig["embedding_col"] = col
+                sig["embeddings"] = None
+                if col and re.fullmatch(r"[A-Za-z0-9_$]+", col):
+                    if where is not None:
+                        cond = (where + " AND" if where else " WHERE") + " `%s` IS NOT NULL" % col
+                        sig["embeddings"] = _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, cond)).scalar()
+                else:
+                    out["warnings"].append("No BLOB embedding column found in '%s'." % TABLE)
+                out["signals"] = sig
+            except SQLAlchemyError as e:   # sirf is table par permission/error: baqi dashboard chalta rahe
+                out["signals"] = None
+                out["warnings"].append("Could not read '%s': %s" % (TABLE, friendly_error(e)))
+                print("signals status error:", type(e).__name__, getattr(e, "orig", e))
     except (SQLAlchemyError, config.ConfigError) as e:
         out["ok"] = out["ok"] and False
         out["error"] = friendly_error(e)
