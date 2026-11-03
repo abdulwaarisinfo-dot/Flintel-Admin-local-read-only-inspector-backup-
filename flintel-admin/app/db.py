@@ -6,6 +6,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from . import config
 
 TABLE = "flintel_signals"
+# Hacker News table (service ke HN_MYSQL_TABLE se match; env se badal sakte hain).
+HN_TABLE = (__import__("os").getenv("HN_MYSQL_TABLE") or "hacker_news").strip() or "hacker_news"
 BLOB_TYPES = {"tinyblob", "blob", "mediumblob", "longblob"}
 _engine = None
 _backup_engine = None
@@ -108,9 +110,51 @@ def _count_scope(columns, warnings):
     return where, {"column": pks[0], "from": lo, "to": hi}, "range"
 
 
+def _hn_status(c, tables) -> dict:
+    """hacker_news table ka read-only status: exact rows, embeddings, latest/earliest fetched_at,
+    platform breakdown. Table na ho ya koi query fail ho to dashboard/baqi status kabhi nahi tootta."""
+    info = {"table": HN_TABLE, "exists": False, "rows": None, "embeddings": None, "size": None,
+            "latest": None, "earliest": None, "by_platform": [], "columns": [], "indexes": [], "error": None}
+    if not re.fullmatch(r"[A-Za-z0-9_$]+", HN_TABLE):
+        info["error"] = "HN_MYSQL_TABLE has invalid characters."
+        return info
+    me = next((t for t in tables if t["name"] == HN_TABLE), None)
+    if me is None:
+        return info
+    info["exists"] = True
+    info["size"] = (me["data_len"] or 0) + (me["idx_len"] or 0)
+    try:
+        info["rows"] = _q(c, "SELECT COUNT(*) FROM `%s`" % HN_TABLE).scalar()
+        cols = _q(c, "SELECT column_name AS name, column_type AS type, is_nullable AS nullable, "
+                     "column_key AS ckey, extra AS extra FROM information_schema.columns "
+                     "WHERE table_schema = DATABASE() AND table_name = :t ORDER BY ordinal_position",
+                  {"t": HN_TABLE}).all()
+        info["columns"] = [dict(r._mapping) for r in cols]
+        names = {x["name"] for x in info["columns"]}
+        info["indexes"] = [dict(r._mapping) for r in _q(
+            c, "SELECT index_name AS name, non_unique AS non_unique, "
+               "GROUP_CONCAT(column_name ORDER BY seq_in_index) AS cols "
+               "FROM information_schema.statistics WHERE table_schema = DATABASE() "
+               "AND table_name = :t GROUP BY index_name, non_unique", {"t": HN_TABLE}).all()]
+        if "embedding" in names:
+            info["embeddings"] = _q(c, "SELECT COUNT(*) FROM `%s` WHERE `embedding` IS NOT NULL" % HN_TABLE).scalar()
+        if "fetched_at" in names:
+            row = _q(c, "SELECT MIN(`fetched_at`), MAX(`fetched_at`) FROM `%s`" % HN_TABLE).first()
+            if row:
+                info["earliest"], info["latest"] = row[0], row[1]
+        if "platform" in names:
+            info["by_platform"] = [dict(r._mapping) for r in _q(
+                c, "SELECT `platform` AS platform, COUNT(*) AS n FROM `%s` GROUP BY `platform` "
+                   "ORDER BY n DESC" % HN_TABLE).all()]
+    except SQLAlchemyError as e:
+        info["error"] = friendly_error(e)
+        print("HN status error:", type(e).__name__, getattr(e, "orig", e))
+    return info
+
+
 def collect_status() -> dict:
     out = {"ok": False, "error": None, "database": None, "version": None, "tables": [],
-           "db_size": None, "signals": None, "columns": [], "indexes": [], "warnings": []}
+           "db_size": None, "signals": None, "hn": None, "columns": [], "indexes": [], "warnings": []}
     try:
         engine = get_engine()
         with engine.connect() as c:
@@ -123,6 +167,8 @@ def collect_status() -> dict:
                          "ORDER BY table_name").all()
             out["tables"] = [dict(r._mapping) for r in rows]
             out["db_size"] = sum((t["data_len"] or 0) + (t["idx_len"] or 0) for t in out["tables"])
+
+            out["hn"] = _hn_status(c, out["tables"])   # hacker_news card (flintel_signals se alag, independent)
 
             names = [t["name"] for t in out["tables"]]
             if TABLE not in names:
