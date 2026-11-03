@@ -79,8 +79,8 @@ Check <b>HN_MYSQL_DATABASE</b> / <b>HN_MYSQL_TABLE</b> in this tool's .env, and 
 {% if info.backup_tables %}<div class="msg ok">BACKUP_TABLES is set in .env: the backup contains <b>only {{ info.backup_tables|join(', ') }}</b> (file <b>{{ info.database }}_{{ info.backup_tables|join('_') }}.json</b>). Remove BACKUP_TABLES to back up every table again.</div>{% endif %}
 <p class="muted">The backup includes <b>every table</b> in the database (flintel_signals{% if info.hn %}, {{ info.hn.table }}{% endif %}, ...). A BACKUP_FROM / BACKUP_TO range only limits <b>flintel_signals</b>; {% if info.hn %}{{ info.hn.table }}{% else %}the other tables{% endif %} is always backed up in full.</p>
 <p class="muted">Saves <b>{% if info.signals and info.signals.range %}{{ info.database or 'database' }}_{{ info.signals.range['from'] }}-{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}{% else %}{{ info.database or 'database' }}{% endif %}.json</b> ({% if info.signals and info.signals.range %}structure + only the rows in that id range{% else %}structure + all rows{% endif %}, read-only; the live database is never changed). Download it right after creating it.</p>
-{% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th></th></tr>
-{% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td>
+{% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th>Tables in file (rows)</th><th></th></tr>
+{% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td><td style="max-width:360px;word-break:break-word">{{ b.tables if b.tables else 'n/a (older backup)' }}</td>
 <td><a class="btn" href="/download/{{ b.name }}">Download</a></td></tr>{% endfor %}</table>
 {% else %}<p class="muted">No backups yet.</p>{% endif %}</div>
 
