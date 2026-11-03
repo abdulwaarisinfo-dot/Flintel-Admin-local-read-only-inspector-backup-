@@ -32,6 +32,13 @@ def friendly_error(e: Exception) -> str:
     d = _detail(e)
     if code == 1045:
         return "Authentication failed: MySQL rejected the username or password. Check the credentials in .env." + d
+    if code == 1044:
+        m = re.search(r"to database '([^']+)'", str(orig.args[1]) if len(orig.args) > 1 else "")
+        bad = m.group(1) if m else ""
+        if bad and bad in (HN_TABLE, TABLE):
+            return ("'%s' is a TABLE, not a database. Set MYSQL_DATABASE=flintel (the database that CONTAINS the "
+                    "'%s' table) in .env, or the database name at the end of DATABASE_URL (.../flintel), then restart. "
+                    "The Hacker News data is shown automatically from the '%s' table." % (bad, bad, bad)) + d
     if code in (1044, 1142, 1143):
         return ("Access denied: this MySQL user lacks permission for the database/table. "
                 "Fix: use the same MYSQL_USER/MYSQL_PASSWORD/MYSQL_DATABASE as the Flintel service, or run "
@@ -160,6 +167,18 @@ def _hn_status(c, tables) -> dict:
             info["by_platform"] = [dict(r._mapping) for r in _q(
                 c, "SELECT `platform` AS platform, COUNT(*) AS n FROM `%s` GROUP BY `platform` "
                    "ORDER BY n DESC" % HN_TABLE).all()]
+            bp = {x["platform"]: x["n"] for x in info["by_platform"]}
+            info["stories"] = bp.get("hackernews", 0)
+            info["comment_docs"] = bp.get("hackernews_comment", 0)
+            info["nested_comments"] = None
+            if "hn_comments" in names:
+                try:
+                    info["nested_comments"] = int(_q(
+                        c, "SELECT COALESCE(SUM(JSON_LENGTH(`hn_comments`)), 0) FROM `%s` "
+                           "WHERE `platform` = 'hackernews'" % HN_TABLE).scalar() or 0)
+                except SQLAlchemyError as e:
+                    print("HN nested comments count failed:", getattr(e, "orig", e))
+            info["total_comments"] = info["comment_docs"] + (info["nested_comments"] or 0)
     except SQLAlchemyError as e:
         info["error"] = friendly_error(e)
         print("HN status error:", type(e).__name__, getattr(e, "orig", e))
@@ -168,7 +187,7 @@ def _hn_status(c, tables) -> dict:
 
 def collect_status() -> dict:
     out = {"ok": False, "error": None, "database": None, "version": None, "tables": [],
-           "db_size": None, "signals": None, "hn": None, "columns": [], "indexes": [], "warnings": []}
+           "db_size": None, "signals": None, "hn": None, "backup_tables": None, "columns": [], "indexes": [], "warnings": []}
     try:
         engine = get_engine()
         with engine.connect() as c:
@@ -182,6 +201,11 @@ def collect_status() -> dict:
             out["tables"] = [dict(r._mapping) for r in rows]
             out["db_size"] = sum((t["data_len"] or 0) + (t["idx_len"] or 0) for t in out["tables"])
 
+            try:
+                from . import backup as _b
+                out["backup_tables"] = _b._table_filter()
+            except Exception:
+                out["backup_tables"] = None
             out["hn"] = _hn_status(c, out["tables"])   # hacker_news card (flintel_signals se alag, independent)
 
             names = [t["name"] for t in out["tables"]]
