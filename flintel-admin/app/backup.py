@@ -58,21 +58,22 @@ def _range_settings():
 
 
 def _table_filter():
-    """Optional: BACKUP_TABLES=hacker_news  (comma separated) -> sirf ye tables backup hon.
+    """Optional: BACKUP_TABLES=hacker_news  ya  BACKUP_TABLES=otherdb.hacker_news  (comma separated)
+    -> sirf ye tables backup hon (database.table likhne se doosre database ka table bhi aa jata hai).
     Khali -> saare tables (pehle jaisa). Returns list ya None."""
     raw = _env("BACKUP_TABLES")
     if not raw:
         return None
     names = [x.strip() for x in raw.split(",") if x.strip()]
     for n in names:
-        if not re.fullmatch(r"[A-Za-z0-9_$]+", n):
+        if not re.fullmatch(r"[A-Za-z0-9_$]+(\.[A-Za-z0-9_$]+)?", n):
             raise BackupError("BACKUP_TABLES has an invalid table name: '%s'." % n)
     return names or None
 
 
 def _bt(name: str) -> str:
-    """Quote an identifier with backticks."""
-    return "`" + name.replace("`", "``") + "`"
+    """Quote an identifier with backticks. 'db.table' -> `db`.`table`."""
+    return ".".join("`" + part.replace("`", "``") + "`" for part in name.split("."))
 
 
 def _json_default(v):
@@ -109,7 +110,7 @@ def create_backup() -> str:
     else:
         final = config.BACKUP_DIR / ("%s.json" % safe_db)
     if only:   # alag file, taake poora backup overwrite na ho
-        suffix = re.sub(r"[^A-Za-z0-9_-]", "", "_".join(only))[:60] or "tables"
+        suffix = re.sub(r"[^A-Za-z0-9_-]", "", "_".join(only).replace(".", "-"))[:60] or "tables"
         final = final.with_name(final.stem + "_" + suffix + ".json")
     tmp = final.with_suffix(".json.tmp")
 
@@ -144,11 +145,13 @@ def _write_backup(tmp_path, database: str, rng=None, only=None) -> None:
         objects.sort(key=lambda x: x[0])
         if only:
             have = {n for n, _ in objects}
-            missing = [n for n in only if n not in have]
+            local = [n for n in only if "." not in n]
+            foreign = [n for n in only if "." in n]      # database.table (doosra database)
+            missing = [n for n in local if n not in have]
             if missing:
                 raise BackupError("Backup failed: BACKUP_TABLES lists table(s) not found in '%s': %s. "
                                   "Available: %s" % (database, ", ".join(missing), ", ".join(sorted(have))))
-            objects = [o for o in objects if o[0] in only]
+            objects = [o for o in objects if o[0] in local] + [(n, "TABLE") for n in foreign]
         if not objects:
             raise BackupError("Backup failed: the database has no tables.")
 
