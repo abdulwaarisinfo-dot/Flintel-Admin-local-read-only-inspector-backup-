@@ -27,6 +27,31 @@
 </div></div>
 {% endif %}
 
+{% if info.hn %}
+<div class="card"><h2>{{ info.hn.table }} <span class="muted">(Hacker News)</span></h2>
+{% if not info.hn.exists %}
+<div class="msg bad">Table <b>{{ info.hn.table }}</b> was not found in database <b>{{ info.database }}</b>. No Hacker News row has been saved there yet.
+Check on the service side: <b>MYSQL_DATA=true</b>, <b>HACKERNEWS_ENABLED=true</b> and that its <b>MYSQL_DATABASE</b> is the same database as this tool's (<b>{{ info.database }}</b>).</div>
+{% else %}
+{% if info.hn.error %}<div class="msg bad">{{ info.hn.error }}</div>{% endif %}
+<div class="grid">
+<div class="stat"><span class="muted">Rows</span><b>{{ info.hn.rows if info.hn.rows is not none else 'n/a' }}</b></div>
+<div class="stat"><span class="muted">Embeddings (embedding)</span><b>{{ info.hn.embeddings if info.hn.embeddings is not none else 'n/a' }}</b></div>
+<div class="stat"><span class="muted">Table size</span><b>{{ info.hn.size|size }}</b></div>
+<div class="stat"><span class="muted">Latest saved (fetched_at, UTC)</span><b style="font-size:15px">{{ info.hn.latest if info.hn.latest else 'n/a' }}</b></div>
+<div class="stat"><span class="muted">First saved (fetched_at, UTC)</span><b style="font-size:15px">{{ info.hn.earliest if info.hn.earliest else 'n/a' }}</b></div>
+</div>
+{% if info.hn.by_platform %}<p class="muted">By platform: {% for p in info.hn.by_platform %}<b>{{ p.platform }}</b> = {{ p.n }}{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>{% endif %}
+{% if info.hn.columns %}<details><summary class="muted">Schema: {{ info.hn.table }}</summary><table>
+<tr><th>Column</th><th>Type</th><th>Null</th><th>Key</th><th>Extra</th></tr>
+{% for c in info.hn.columns %}<tr><td>{{ c.name }}</td><td>{{ c.type }}</td><td>{{ c.nullable }}</td><td>{{ c.ckey }}</td><td>{{ c.extra }}</td></tr>{% endfor %}
+</table><br><table>
+<tr><th>Index</th><th>Unique</th><th>Columns</th></tr>
+{% for i in info.hn.indexes %}<tr><td>{{ i.name }}</td><td>{{ 'no' if i.non_unique else 'yes' }}</td><td>{{ i.cols }}</td></tr>{% endfor %}
+</table></details>{% endif %}
+{% endif %}</div>
+{% endif %}
+
 <div class="card"><h2>Tables</h2><table>
 <tr><th>Name</th><th>Approx. rows</th><th>Data</th><th>Indexes</th></tr>
 {% for t in info.tables %}<tr><td>{{ t.name }}</td><td>{{ t.approx_rows }}</td><td>{{ t.data_len|size }}</td><td>{{ t.idx_len|size }}</td></tr>{% endfor %}
@@ -47,6 +72,7 @@
 <form method="post" action="/backup" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Backing up...'">
 <button type="submit">Create Backup</button></form></div>
 {% if info.signals %}<p class="muted">Backup range: {% if info.signals.range_state == 'range' %}<b>ids {{ info.signals.range['from'] }}&ndash;{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}</b> (from .env) &rarr; file <b>{{ info.database }}_{{ info.signals.range['from'] }}-{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}.json</b>{% elif info.signals.range_state == 'full' %}<b>not set</b> &rarr; full backup of all rows. (BACKUP_FROM / BACKUP_TO were not found in .env or the environment.){% else %}see the warning above{% endif %}</p>{% endif %}
+<p class="muted">The backup includes <b>every table</b> in the database (flintel_signals{% if info.hn %}, {{ info.hn.table }}{% endif %}, ...). A BACKUP_FROM / BACKUP_TO range only limits <b>flintel_signals</b>; {% if info.hn %}{{ info.hn.table }}{% else %}the other tables{% endif %} is always backed up in full.</p>
 <p class="muted">Saves <b>{% if info.signals and info.signals.range %}{{ info.database or 'database' }}_{{ info.signals.range['from'] }}-{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}{% else %}{{ info.database or 'database' }}{% endif %}.json</b> ({% if info.signals and info.signals.range %}structure + only the rows in that id range{% else %}structure + all rows{% endif %}, read-only; the live database is never changed). Download it right after creating it.</p>
 {% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th></th></tr>
 {% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td>
