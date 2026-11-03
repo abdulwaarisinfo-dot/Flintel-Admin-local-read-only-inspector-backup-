@@ -57,6 +57,19 @@ def _range_settings():
     return lo, hi
 
 
+def _table_filter():
+    """Optional: BACKUP_TABLES=hacker_news  (comma separated) -> sirf ye tables backup hon.
+    Khali -> saare tables (pehle jaisa). Returns list ya None."""
+    raw = _env("BACKUP_TABLES")
+    if not raw:
+        return None
+    names = [x.strip() for x in raw.split(",") if x.strip()]
+    for n in names:
+        if not re.fullmatch(r"[A-Za-z0-9_$]+", n):
+            raise BackupError("BACKUP_TABLES has an invalid table name: '%s'." % n)
+    return names or None
+
+
 def _bt(name: str) -> str:
     """Quote an identifier with backticks."""
     return "`" + name.replace("`", "``") + "`"
@@ -88,19 +101,23 @@ def create_backup() -> str:
         raise BackupError(str(e))
 
     rng = _range_settings()   # None = full backup (default)
+    only = _table_filter()    # None = saare tables (default)
 
     safe_db = re.sub(r"[^A-Za-z0-9_-]", "", s["database"]) or "database"
     if rng:   # one file per range, so a new range never overwrites the previous one
         final = config.BACKUP_DIR / ("%s_%d-%s.json" % (safe_db, rng[0], "end" if rng[1] is None else rng[1]))
     else:
         final = config.BACKUP_DIR / ("%s.json" % safe_db)
+    if only:   # alag file, taake poora backup overwrite na ho
+        suffix = re.sub(r"[^A-Za-z0-9_-]", "", "_".join(only))[:60] or "tables"
+        final = final.with_name(final.stem + "_" + suffix + ".json")
     tmp = final.with_suffix(".json.tmp")
 
     if not _lock.acquire(blocking=False):
         raise BackupError("A backup is already running. Please wait for it to finish.")
     try:
         try:
-            _write_backup(tmp, s["database"], rng)
+            _write_backup(tmp, s["database"], rng, only)
         except (SQLAlchemyError, config.ConfigError) as e:
             tmp.unlink(missing_ok=True)
             print("Backup DB error:", type(e).__name__, getattr(e, "orig", e))
@@ -118,13 +135,20 @@ def create_backup() -> str:
         _lock.release()
 
 
-def _write_backup(tmp_path, database: str, rng=None) -> None:
+def _write_backup(tmp_path, database: str, rng=None, only=None) -> None:
     engine = db.get_backup_engine()
     with engine.connect() as conn:   # one read-only transaction = consistent snapshot
         version = db.run_ro(conn, "SELECT VERSION()").scalar()
         listing = db.run_ro(conn, "SHOW FULL TABLES").all()
         objects = [(r[0], "VIEW" if str(r[1]).upper().endswith("VIEW") else "TABLE") for r in listing]
         objects.sort(key=lambda x: x[0])
+        if only:
+            have = {n for n, _ in objects}
+            missing = [n for n in only if n not in have]
+            if missing:
+                raise BackupError("Backup failed: BACKUP_TABLES lists table(s) not found in '%s': %s. "
+                                  "Available: %s" % (database, ", ".join(missing), ", ".join(sorted(have))))
+            objects = [o for o in objects if o[0] in only]
         if not objects:
             raise BackupError("Backup failed: the database has no tables.")
 
