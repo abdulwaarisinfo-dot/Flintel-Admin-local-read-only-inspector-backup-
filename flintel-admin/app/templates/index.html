@@ -28,10 +28,10 @@
 {% endif %}
 
 {% if info.hn %}
-<div class="card"><h2>{{ info.hn.table }} <span class="muted">(Hacker News)</span></h2>
+<div class="card"><h2>{{ info.hn.full }} <span class="muted">(Hacker News: database.table)</span></h2>
 {% if not info.hn.exists %}
-<div class="msg bad">Table <b>{{ info.hn.table }}</b> was not found in database <b>{{ info.database }}</b> (or this MySQL user has no SELECT permission on it). Either no Hacker News row has been saved there yet, or the user needs <b>GRANT SELECT</b> on it.
-Check on the service side: <b>MYSQL_DATA=true</b>, <b>HACKERNEWS_ENABLED=true</b> and that its <b>MYSQL_DATABASE</b> is the same database as this tool's (<b>{{ info.database }}</b>).</div>
+<div class="msg bad">Table <b>{{ info.hn.table }}</b> was not found in database <b>{{ info.hn.schema }}</b> (or this MySQL user has no SELECT permission on it). Either no Hacker News row has been saved there yet, or the user needs <b>GRANT SELECT</b> on it.
+Check <b>HN_MYSQL_DATABASE</b> / <b>HN_MYSQL_TABLE</b> in this tool's .env, and on the service side <b>MYSQL_DATA=true</b>, <b>HACKERNEWS_ENABLED=true</b> and its <b>MYSQL_DATABASE</b>.</div>
 {% else %}
 {% if info.hn.error %}<div class="msg bad">{{ info.hn.error }}</div>{% endif %}
 <div class="grid">
