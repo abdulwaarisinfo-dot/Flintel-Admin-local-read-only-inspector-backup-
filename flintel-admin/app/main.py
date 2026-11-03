@@ -62,7 +62,8 @@ def create_backup(request: Request):
         return RedirectResponse("/login", status_code=303)
     try:
         name = backup.create_backup()
-        request.session["flash"] = {"ok": True, "msg": "Backup created: " + name}
+        info = backup.manifest_text(name)
+        request.session["flash"] = {"ok": True, "msg": "Backup created: " + name + (" | rows saved: " + info if info else "")}
     except backup.BackupError as e:
         request.session["flash"] = {"ok": False, "msg": str(e)}
     return RedirectResponse("/", status_code=303)
