@@ -118,7 +118,7 @@ def create_backup() -> str:
         raise BackupError("A backup is already running. Please wait for it to finish.")
     try:
         try:
-            _write_backup(tmp, s["database"], rng, only)
+            counts = _write_backup(tmp, s["database"], rng, only)
         except (SQLAlchemyError, config.ConfigError) as e:
             tmp.unlink(missing_ok=True)
             print("Backup DB error:", type(e).__name__, getattr(e, "orig", e))
@@ -131,6 +131,12 @@ def create_backup() -> str:
             print("Backup error:", type(e).__name__, e)
             raise BackupError("Backup failed (%s). Check the server log." % type(e).__name__)
         tmp.replace(final)   # only a fully written file ever becomes the real backup
+        try:   # chhota sidecar: kaun se table kitni rows ke saath file mein hain (dashboard dikhata hai)
+            _manifest_path(final.name).write_text(
+                json.dumps({"tables": counts, "created_at": datetime.now().isoformat(timespec="seconds")}),
+                encoding="utf-8")
+        except Exception as e:
+            print("Could not write backup manifest:", e)
         return final.name
     finally:
         _lock.release()
@@ -165,13 +171,15 @@ def _write_backup(tmp_path, database: str, rng=None, only=None) -> None:
                 'Values like {"__hex__": "ab12"} are BLOB bytes in hex. Decimals/dates are strings.'))
             f.write('"tables": {\n')
 
+            counts = {}
             for i, (name, kind) in enumerate(objects):
                 if i:
                     f.write(",\n")
-                _write_object(f, conn, name, kind, rng)
+                counts[name] = _write_object(f, conn, name, kind, rng)
 
             f.write("\n},\n")
             f.write('"completed_at": %s\n}\n' % _dumps(datetime.now().isoformat(timespec="seconds")))
+    return counts
 
 
 def _write_object(f, conn, name: str, kind: str, rng=None) -> None:
@@ -187,7 +195,7 @@ def _write_object(f, conn, name: str, kind: str, rng=None) -> None:
 
     if kind == "VIEW":
         f.write("%s: %s" % (_dumps(name), _dumps({"type": "view", "create_sql": create_sql})))
-        return
+        return None
 
     cols = db.run_ro(conn, "SHOW COLUMNS FROM %s" % q).all()
     columns = [{"name": c[0], "type": c[1]} for c in cols]
@@ -218,13 +226,27 @@ def _write_object(f, conn, name: str, kind: str, rng=None) -> None:
         result.close()
 
     f.write("\n],\n\"row_count\": %d\n}" % count)
+    return count
+
+
+def _manifest_path(name: str):
+    return config.BACKUP_DIR / (name + ".info")
+
+
+def manifest_text(name: str) -> str:
+    """'flintel_signals=6999, hacker_news=2039' (ya '' agar manifest nahi: purana backup)."""
+    try:
+        data = json.loads(_manifest_path(name).read_text(encoding="utf-8"))
+        return ", ".join("%s=%s" % (t, "view" if n is None else n) for t, n in data.get("tables", {}).items())
+    except Exception:
+        return ""
 
 
 def list_backups():
     out = []
     for p in config.BACKUP_DIR.glob("*.json"):
         st = p.stat()
-        out.append({"name": p.name, "size": st.st_size,
+        out.append({"name": p.name, "size": st.st_size, "tables": manifest_text(p.name),
                     "when": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")})
     return sorted(out, key=lambda x: x["name"], reverse=True)
 
