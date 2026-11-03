@@ -8,6 +8,8 @@ from . import config
 TABLE = "flintel_signals"
 # Hacker News table (service ke HN_MYSQL_TABLE se match; env se badal sakte hain).
 HN_TABLE = (__import__("os").getenv("HN_MYSQL_TABLE") or "hacker_news").strip() or "hacker_news"
+# HN ka DATABASE naam (optional). Khali = wahi database jis se connect hain (MYSQL_DATABASE).
+HN_DB = (__import__("os").getenv("HN_MYSQL_DATABASE") or "").strip()
 BLOB_TYPES = {"tinyblob", "blob", "mediumblob", "longblob"}
 _engine = None
 _backup_engine = None
@@ -132,41 +134,47 @@ def _count_scope(columns, warnings):
 
 
 def _hn_status(c, tables) -> dict:
-    """hacker_news table ka read-only status: exact rows, embeddings, latest/earliest fetched_at,
-    platform breakdown. Table na ho ya koi query fail ho to dashboard/baqi status kabhi nahi tootta."""
-    info = {"table": HN_TABLE, "exists": False, "rows": None, "embeddings": None, "size": None,
-            "latest": None, "earliest": None, "by_platform": [], "columns": [], "indexes": [], "error": None}
-    if not re.fullmatch(r"[A-Za-z0-9_$]+", HN_TABLE):
-        info["error"] = "HN_MYSQL_TABLE has invalid characters."
+    """Hacker News table ka read-only status. Database = HN_MYSQL_DATABASE (khali ho to connected DB),
+    table = HN_MYSQL_TABLE. Exact rows, stories/comments, embeddings, latest/earliest fetched_at.
+    Table na ho ya koi query fail ho to dashboard/baqi status kabhi nahi tootta."""
+    schema = HN_DB or (_q(c, "SELECT DATABASE()").scalar() or "")
+    info = {"table": HN_TABLE, "schema": schema, "full": "%s.%s" % (schema, HN_TABLE), "exists": False,
+            "rows": None, "embeddings": None, "size": None, "latest": None, "earliest": None,
+            "by_platform": [], "columns": [], "indexes": [], "error": None}
+    ident = r"[A-Za-z0-9_$]+"
+    if not (re.fullmatch(ident, HN_TABLE) and re.fullmatch(ident, schema or "x")):
+        info["error"] = "HN_MYSQL_DATABASE / HN_MYSQL_TABLE has invalid characters."
         return info
-    me = next((t for t in tables if t["name"] == HN_TABLE), None)
-    if me is None:
-        return info
-    info["exists"] = True
-    info["size"] = (me["data_len"] or 0) + (me["idx_len"] or 0)
+    full = "`%s`.`%s`" % (schema, HN_TABLE)
     try:
-        info["rows"] = _q(c, "SELECT COUNT(*) FROM `%s`" % HN_TABLE).scalar()
+        me = _q(c, "SELECT data_length AS data_len, index_length AS idx_len FROM information_schema.tables "
+                   "WHERE table_schema = :s AND table_name = :t", {"s": schema, "t": HN_TABLE}).first()
+        if me is None:
+            return info
+        info["exists"] = True
+        info["size"] = (me.data_len or 0) + (me.idx_len or 0)
+        info["rows"] = _q(c, "SELECT COUNT(*) FROM %s" % full).scalar()
         cols = _q(c, "SELECT column_name AS name, column_type AS type, is_nullable AS nullable, "
                      "column_key AS ckey, extra AS extra FROM information_schema.columns "
-                     "WHERE table_schema = DATABASE() AND table_name = :t ORDER BY ordinal_position",
-                  {"t": HN_TABLE}).all()
+                     "WHERE table_schema = :s AND table_name = :t ORDER BY ordinal_position",
+                  {"s": schema, "t": HN_TABLE}).all()
         info["columns"] = [dict(r._mapping) for r in cols]
         names = {x["name"] for x in info["columns"]}
         info["indexes"] = [dict(r._mapping) for r in _q(
             c, "SELECT index_name AS name, non_unique AS non_unique, "
                "GROUP_CONCAT(column_name ORDER BY seq_in_index) AS cols "
-               "FROM information_schema.statistics WHERE table_schema = DATABASE() "
-               "AND table_name = :t GROUP BY index_name, non_unique", {"t": HN_TABLE}).all()]
+               "FROM information_schema.statistics WHERE table_schema = :s "
+               "AND table_name = :t GROUP BY index_name, non_unique", {"s": schema, "t": HN_TABLE}).all()]
         if "embedding" in names:
-            info["embeddings"] = _q(c, "SELECT COUNT(*) FROM `%s` WHERE `embedding` IS NOT NULL" % HN_TABLE).scalar()
+            info["embeddings"] = _q(c, "SELECT COUNT(*) FROM %s WHERE `embedding` IS NOT NULL" % full).scalar()
         if "fetched_at" in names:
-            row = _q(c, "SELECT MIN(`fetched_at`), MAX(`fetched_at`) FROM `%s`" % HN_TABLE).first()
+            row = _q(c, "SELECT MIN(`fetched_at`), MAX(`fetched_at`) FROM %s" % full).first()
             if row:
                 info["earliest"], info["latest"] = row[0], row[1]
         if "platform" in names:
             info["by_platform"] = [dict(r._mapping) for r in _q(
-                c, "SELECT `platform` AS platform, COUNT(*) AS n FROM `%s` GROUP BY `platform` "
-                   "ORDER BY n DESC" % HN_TABLE).all()]
+                c, "SELECT `platform` AS platform, COUNT(*) AS n FROM %s GROUP BY `platform` "
+                   "ORDER BY n DESC" % full).all()]
             bp = {x["platform"]: x["n"] for x in info["by_platform"]}
             info["stories"] = bp.get("hackernews", 0)
             info["comment_docs"] = bp.get("hackernews_comment", 0)
@@ -174,8 +182,8 @@ def _hn_status(c, tables) -> dict:
             if "hn_comments" in names:
                 try:
                     info["nested_comments"] = int(_q(
-                        c, "SELECT COALESCE(SUM(JSON_LENGTH(`hn_comments`)), 0) FROM `%s` "
-                           "WHERE `platform` = 'hackernews'" % HN_TABLE).scalar() or 0)
+                        c, "SELECT COALESCE(SUM(JSON_LENGTH(`hn_comments`)), 0) FROM %s "
+                           "WHERE `platform` = 'hackernews'" % full).scalar() or 0)
                 except SQLAlchemyError as e:
                     print("HN nested comments count failed:", getattr(e, "orig", e))
             info["total_comments"] = info["comment_docs"] + (info["nested_comments"] or 0)
