@@ -18,7 +18,7 @@
 
 {% if info.ok %}
 {% if info.signals %}
-<div class="card"><h2>flintel_signals</h2>
+<div class="card"><h2>{{ info.sig_full or "flintel_signals" }}</h2>
 {% if info.signals.range %}<div class="msg ok">Range from .env: only ids <b>{{ info.signals.range['from'] }}&ndash;{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}</b> are counted and backed up. The rest of the table is not read.</div>{% endif %}
 <div class="grid">
 <div class="stat"><span class="muted">Rows{% if info.signals.range %} (in range){% endif %}</span><b>{{ info.signals.rows if info.signals.rows is not none else 'n/a' }}</b></div>
@@ -56,13 +56,13 @@ Check <b>HN_MYSQL_DATABASE</b> / <b>HN_MYSQL_TABLE</b> in this tool's .env, and 
 {% endif %}</div>
 {% endif %}
 
-<div class="card"><h2>Tables</h2><table>
+<div class="card"><h2>Tables in database <b>{{ info.database }}</b></h2><table>
 <tr><th>Name</th><th>Approx. rows</th><th>Data</th><th>Indexes</th></tr>
 {% for t in info.tables %}<tr><td>{{ t.name }}</td><td>{{ t.approx_rows }}</td><td>{{ t.data_len|size }}</td><td>{{ t.idx_len|size }}</td></tr>{% endfor %}
 </table></div>
 
 {% if info.columns %}
-<div class="card"><h2>Schema: flintel_signals</h2><table>
+<div class="card"><h2>Schema: {{ info.sig_full or "flintel_signals" }}</h2><table>
 <tr><th>Column</th><th>Type</th><th>Null</th><th>Key</th><th>Extra</th></tr>
 {% for c in info.columns %}<tr><td>{{ c.name }}</td><td>{{ c.type }}</td><td>{{ c.nullable }}</td><td>{{ c.ckey }}</td><td>{{ c.extra }}</td></tr>{% endfor %}
 </table><br><table>
@@ -77,7 +77,7 @@ Check <b>HN_MYSQL_DATABASE</b> / <b>HN_MYSQL_TABLE</b> in this tool's .env, and 
 <button type="submit">Create Backup</button></form></div>
 {% if info.signals %}<p class="muted">Backup range: {% if info.signals.range_state == 'range' %}<b>ids {{ info.signals.range['from'] }}&ndash;{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}</b> (from .env) &rarr; file <b>{{ info.database }}_{{ info.signals.range['from'] }}-{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}.json</b>{% elif info.signals.range_state == 'full' %}<b>not set</b> &rarr; full backup of all rows. (BACKUP_FROM / BACKUP_TO were not found in .env or the environment.){% else %}see the warning above{% endif %}</p>{% endif %}
 {% if info.backup_tables %}<div class="msg ok">BACKUP_TABLES is set in .env: the backup contains <b>only {{ info.backup_tables|join(', ') }}</b> (file <b>{{ info.database }}_{{ info.backup_tables|join('_') }}.json</b>). Remove BACKUP_TABLES to back up every table again.</div>{% endif %}
-<p class="muted">The backup includes <b>every table</b> in the database (flintel_signals{% if info.hn %}, {{ info.hn.table }}{% endif %}, ...). A BACKUP_FROM / BACKUP_TO range only limits <b>flintel_signals</b>; {% if info.hn %}{{ info.hn.table }}{% else %}the other tables{% endif %} is always backed up in full.</p>
+<p class="muted">The backup includes <b>every table</b> in the database ({{ info.sig_table or "flintel_signals" }}{% if info.hn %}, {{ info.hn.table }}{% endif %}, ...). A BACKUP_FROM / BACKUP_TO range only limits <b>{{ info.sig_table or "flintel_signals" }}</b>; {% if info.hn %}{{ info.hn.table }}{% else %}the other tables{% endif %} is always backed up in full.</p>
 <p class="muted">Saves <b>{% if info.signals and info.signals.range %}{{ info.database or 'database' }}_{{ info.signals.range['from'] }}-{{ info.signals.range.to if info.signals.range.to is not none else 'end' }}{% else %}{{ info.database or 'database' }}{% endif %}.json</b> ({% if info.signals and info.signals.range %}structure + only the rows in that id range{% else %}structure + all rows{% endif %}, read-only; the live database is never changed). Download it right after creating it.</p>
 {% if backups %}<table><tr><th>File</th><th>Created</th><th>Size</th><th>Tables in file (rows)</th><th></th></tr>
 {% for b in backups %}<tr><td>{{ b.name }}</td><td>{{ b.when }}</td><td>{{ b.size|size }}</td><td style="max-width:360px;word-break:break-word">{{ b.tables if b.tables else 'n/a (older backup)' }}</td>
