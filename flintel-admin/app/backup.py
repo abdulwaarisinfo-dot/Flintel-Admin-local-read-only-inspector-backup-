@@ -57,20 +57,6 @@ def _range_settings():
     return lo, hi
 
 
-def _table_filter():
-    """Optional: BACKUP_TABLES=hacker_news  ya  BACKUP_TABLES=otherdb.hacker_news  (comma separated)
-    -> sirf ye tables backup hon (database.table likhne se doosre database ka table bhi aa jata hai).
-    Khali -> saare tables (pehle jaisa). Returns list ya None."""
-    raw = _env("BACKUP_TABLES")
-    if not raw:
-        return None
-    names = [x.strip() for x in raw.split(",") if x.strip()]
-    for n in names:
-        if not re.fullmatch(r"[A-Za-z0-9_$]+(\.[A-Za-z0-9_$]+)?", n):
-            raise BackupError("BACKUP_TABLES has an invalid table name: '%s'." % n)
-    return names or None
-
-
 def _bt(name: str) -> str:
     """Quote an identifier with backticks. 'db.table' -> `db`.`table`."""
     return ".".join("`" + part.replace("`", "``") + "`" for part in name.split("."))
@@ -96,29 +82,32 @@ def _dumps(obj) -> str:
 
 
 def create_backup() -> str:
+    """Backup = SIRF wohi table jo .env mein SIGNALS_MYSQL_DATABASE + SIGNALS_MYSQL_TABLE se set hai
+    (database khali ho to connected MYSQL_DATABASE). BACKUP_FROM / BACKUP_TO ho to us table ki id range."""
     try:
         s = config.get_db_settings()
     except config.ConfigError as e:
         raise BackupError(str(e))
 
-    rng = _range_settings()   # None = full backup (default)
-    only = _table_filter()    # None = saare tables (default)
+    schema = db.SIGNALS_DB or s["database"]
+    table = db.TABLE
+    for part in (schema, table):
+        if not re.fullmatch(r"[A-Za-z0-9_$]+", part or ""):
+            raise BackupError("SIGNALS_MYSQL_DATABASE / SIGNALS_MYSQL_TABLE has invalid characters.")
+    rng = _range_settings()   # None = poori table
 
-    safe_db = re.sub(r"[^A-Za-z0-9_-]", "", s["database"]) or "database"
+    base = re.sub(r"[^A-Za-z0-9_-]", "", "%s_%s" % (schema, table)) or "backup"
     if rng:   # one file per range, so a new range never overwrites the previous one
-        final = config.BACKUP_DIR / ("%s_%d-%s.json" % (safe_db, rng[0], "end" if rng[1] is None else rng[1]))
+        final = config.BACKUP_DIR / ("%s_%d-%s.json" % (base, rng[0], "end" if rng[1] is None else rng[1]))
     else:
-        final = config.BACKUP_DIR / ("%s.json" % safe_db)
-    if only:   # alag file, taake poora backup overwrite na ho
-        suffix = re.sub(r"[^A-Za-z0-9_-]", "", "_".join(only).replace(".", "-"))[:60] or "tables"
-        final = final.with_name(final.stem + "_" + suffix + ".json")
+        final = config.BACKUP_DIR / ("%s.json" % base)
     tmp = final.with_suffix(".json.tmp")
 
     if not _lock.acquire(blocking=False):
         raise BackupError("A backup is already running. Please wait for it to finish.")
     try:
         try:
-            counts = _write_backup(tmp, s["database"], rng, only)
+            counts = _write_backup(tmp, s["database"], schema, table, rng)
         except (SQLAlchemyError, config.ConfigError) as e:
             tmp.unlink(missing_ok=True)
             print("Backup DB error:", type(e).__name__, getattr(e, "orig", e))
@@ -131,7 +120,7 @@ def create_backup() -> str:
             print("Backup error:", type(e).__name__, e)
             raise BackupError("Backup failed (%s). Check the server log." % type(e).__name__)
         tmp.replace(final)   # only a fully written file ever becomes the real backup
-        try:   # chhota sidecar: kaun se table kitni rows ke saath file mein hain (dashboard dikhata hai)
+        try:   # chhota sidecar: table kitni rows ke saath file mein hai (dashboard dikhata hai)
             _manifest_path(final.name).write_text(
                 json.dumps({"tables": counts, "created_at": datetime.now().isoformat(timespec="seconds")}),
                 encoding="utf-8")
@@ -142,29 +131,24 @@ def create_backup() -> str:
         _lock.release()
 
 
-def _write_backup(tmp_path, database: str, rng=None, only=None) -> None:
+def _write_backup(tmp_path, database: str, schema: str, table: str, rng=None):
+    full = "%s.%s" % (schema, table)
     engine = db.get_backup_engine()
     with engine.connect() as conn:   # one read-only transaction = consistent snapshot
         version = db.run_ro(conn, "SELECT VERSION()").scalar()
-        listing = db.run_ro(conn, "SHOW FULL TABLES").all()
-        objects = [(r[0], "VIEW" if str(r[1]).upper().endswith("VIEW") else "TABLE") for r in listing]
-        objects.sort(key=lambda x: x[0])
-        if only:
-            have = {n for n, _ in objects}
-            local = [n for n in only if "." not in n]
-            foreign = [n for n in only if "." in n]      # database.table (doosra database)
-            missing = [n for n in local if n not in have]
-            if missing:
-                raise BackupError("Backup failed: BACKUP_TABLES lists table(s) not found in '%s': %s. "
-                                  "Available: %s" % (database, ", ".join(missing), ", ".join(sorted(have))))
-            objects = [o for o in objects if o[0] in local] + [(n, "TABLE") for n in foreign]
-        if not objects:
-            raise BackupError("Backup failed: the database has no tables.")
+        # names upar regex se validate ho chuke hain
+        row = db.run_ro(conn, "SELECT table_type FROM information_schema.tables "
+                              "WHERE table_schema = '%s' AND table_name = '%s'" % (schema, table)).first()
+        if row is None:
+            raise BackupError("Backup failed: table '%s' was not found (or this MySQL user has no SELECT "
+                              "permission on it). Check SIGNALS_MYSQL_DATABASE / SIGNALS_MYSQL_TABLE in .env." % full)
+        objects = [(full, "VIEW" if "VIEW" in str(row[0]).upper() else "TABLE")]
 
         with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
             f.write("{\n")
             f.write('"format": %s,\n' % _dumps(FORMAT))
-            f.write('"database": %s,\n' % _dumps(database))
+            f.write('"database": %s,\n' % _dumps(schema))
+            f.write('"table": %s,\n' % _dumps(table))
             f.write('"created_at": %s,\n' % _dumps(datetime.now().isoformat(timespec="seconds")))
             f.write('"server_version": %s,\n' % _dumps(version))
             f.write('"note": %s,\n' % _dumps(
@@ -201,10 +185,7 @@ def _write_object(f, conn, name: str, kind: str, rng=None) -> None:
     columns = [{"name": c[0], "type": c[1]} for c in cols]
 
     where, range_note = "", ""
-    sig_names = {db.TABLE}
-    if db.SIGNALS_DB:
-        sig_names.add("%s.%s" % (db.SIGNALS_DB, db.TABLE))
-    if rng and name in sig_names:   # other tables (if any) are still backed up in full
+    if rng:   # backup sirf ek table ka hai: range usi par lagti hai
         pks = [c[0] for c in cols if str(c[3]).upper() == "PRI"]
         if len(pks) != 1:
             raise BackupError("Backup failed: a range backup needs a single-column primary key on %s." % name)
