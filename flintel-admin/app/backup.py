@@ -201,7 +201,10 @@ def _write_object(f, conn, name: str, kind: str, rng=None) -> None:
     columns = [{"name": c[0], "type": c[1]} for c in cols]
 
     where, range_note = "", ""
-    if rng and name == db.TABLE:   # other tables (if any) are still backed up in full
+    sig_names = {db.TABLE}
+    if db.SIGNALS_DB:
+        sig_names.add("%s.%s" % (db.SIGNALS_DB, db.TABLE))
+    if rng and name in sig_names:   # other tables (if any) are still backed up in full
         pks = [c[0] for c in cols if str(c[3]).upper() == "PRI"]
         if len(pks) != 1:
             raise BackupError("Backup failed: a range backup needs a single-column primary key on %s." % name)
