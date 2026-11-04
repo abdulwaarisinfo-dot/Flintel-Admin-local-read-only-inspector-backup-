@@ -5,7 +5,11 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from . import config
 
-TABLE = "flintel_signals"
+# Main messages table (Reddit/Twitter signals): DATABASE + TABLE dono .env se set ho sakte hain.
+#   SIGNALS_MYSQL_DATABASE khali = wahi database jis se connect hain (MYSQL_DATABASE)
+#   SIGNALS_MYSQL_TABLE    default = flintel_signals
+TABLE = (__import__("os").getenv("SIGNALS_MYSQL_TABLE") or "flintel_signals").strip() or "flintel_signals"
+SIGNALS_DB = (__import__("os").getenv("SIGNALS_MYSQL_DATABASE") or "").strip()
 # Hacker News table (service ke HN_MYSQL_TABLE se match; env se badal sakte hain).
 HN_TABLE = (__import__("os").getenv("HN_MYSQL_TABLE") or "hacker_news").strip() or "hacker_news"
 # HN ka DATABASE naam (optional). Khali = wahi database jis se connect hain (MYSQL_DATABASE).
@@ -195,7 +199,7 @@ def _hn_status(c, tables) -> dict:
 
 def collect_status() -> dict:
     out = {"ok": False, "error": None, "database": None, "version": None, "tables": [],
-           "db_size": None, "signals": None, "hn": None, "backup_tables": None, "columns": [], "indexes": [], "warnings": []}
+           "db_size": None, "signals": None, "sig_table": None, "sig_schema": None, "sig_full": None, "hn": None, "backup_tables": None, "columns": [], "indexes": [], "warnings": []}
     try:
         engine = get_engine()
         with engine.connect() as c:
@@ -216,29 +220,40 @@ def collect_status() -> dict:
                 out["backup_tables"] = None
             out["hn"] = _hn_status(c, out["tables"])   # hacker_news card (flintel_signals se alag, independent)
 
-            names = [t["name"] for t in out["tables"]]
-            if TABLE not in names:
-                out["warnings"].append("Table '%s' was not found (or this MySQL user has no SELECT permission on it)." % TABLE)
+            # Main table: database + table dono dekhe jate hain (sirf connected database par rely nahi).
+            sig_schema = SIGNALS_DB or out["database"] or ""
+            out["sig_table"] = TABLE
+            out["sig_schema"] = sig_schema
+            out["sig_full"] = "%s.%s" % (sig_schema, TABLE)
+            ident = r"[A-Za-z0-9_$]+"
+            if not (re.fullmatch(ident, TABLE) and re.fullmatch(ident, sig_schema or "x")):
+                out["warnings"].append("SIGNALS_MYSQL_DATABASE / SIGNALS_MYSQL_TABLE has invalid characters.")
                 return out
+            full = "`%s`.`%s`" % (sig_schema, TABLE)
 
             try:
-                sig = {}
-                me = next(t for t in out["tables"] if t["name"] == TABLE)
-                sig["size"] = (me["data_len"] or 0) + (me["idx_len"] or 0)
+                me = _q(c, "SELECT data_length AS data_len, index_length AS idx_len FROM information_schema.tables "
+                           "WHERE table_schema = :s AND table_name = :t", {"s": sig_schema, "t": TABLE}).first()
+                if me is None:
+                    out["warnings"].append(
+                        "Table '%s' was not found (or this MySQL user has no SELECT permission on it). "
+                        "Check SIGNALS_MYSQL_DATABASE / SIGNALS_MYSQL_TABLE in .env." % out["sig_full"])
+                    return out
+                sig = {"size": (me.data_len or 0) + (me.idx_len or 0)}
 
                 cols = _q(c, "SELECT column_name AS name, column_type AS type, is_nullable AS nullable, "
                              "column_key AS ckey, extra AS extra FROM information_schema.columns "
-                             "WHERE table_schema = DATABASE() AND table_name = :t "
-                             "ORDER BY ordinal_position", {"t": TABLE}).all()
+                             "WHERE table_schema = :s AND table_name = :t "
+                             "ORDER BY ordinal_position", {"s": sig_schema, "t": TABLE}).all()
                 out["columns"] = [dict(r._mapping) for r in cols]
                 out["indexes"] = [dict(r._mapping) for r in _q(
                     c, "SELECT index_name AS name, non_unique AS non_unique, "
                        "GROUP_CONCAT(column_name ORDER BY seq_in_index) AS cols "
-                       "FROM information_schema.statistics WHERE table_schema = DATABASE() "
-                       "AND table_name = :t GROUP BY index_name, non_unique", {"t": TABLE}).all()]
+                       "FROM information_schema.statistics WHERE table_schema = :s "
+                       "AND table_name = :t GROUP BY index_name, non_unique", {"s": sig_schema, "t": TABLE}).all()]
 
                 where, sig["range"], sig["range_state"] = _count_scope(out["columns"], out["warnings"])
-                sig["rows"] = None if where is None else _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, where)).scalar()
+                sig["rows"] = None if where is None else _q(c, "SELECT COUNT(*) FROM %s%s" % (full, where)).scalar()
 
                 blobs = [x["name"] for x in out["columns"]
                          if str(x["type"]).split("(")[0].lower() in BLOB_TYPES]
@@ -248,13 +263,13 @@ def collect_status() -> dict:
                 if col and re.fullmatch(r"[A-Za-z0-9_$]+", col):
                     if where is not None:
                         cond = (where + " AND" if where else " WHERE") + " `%s` IS NOT NULL" % col
-                        sig["embeddings"] = _q(c, "SELECT COUNT(*) FROM `%s`%s" % (TABLE, cond)).scalar()
+                        sig["embeddings"] = _q(c, "SELECT COUNT(*) FROM %s%s" % (full, cond)).scalar()
                 else:
-                    out["warnings"].append("No BLOB embedding column found in '%s'." % TABLE)
+                    out["warnings"].append("No BLOB embedding column found in '%s'." % out["sig_full"])
                 out["signals"] = sig
             except SQLAlchemyError as e:   # sirf is table par permission/error: baqi dashboard chalta rahe
                 out["signals"] = None
-                out["warnings"].append("Could not read '%s': %s" % (TABLE, friendly_error(e)))
+                out["warnings"].append("Could not read '%s': %s" % (out["sig_full"], friendly_error(e)))
                 print("signals status error:", type(e).__name__, getattr(e, "orig", e))
     except (SQLAlchemyError, config.ConfigError) as e:
         out["ok"] = out["ok"] and False
